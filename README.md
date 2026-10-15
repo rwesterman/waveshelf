@@ -9,16 +9,31 @@ Waveshelf is an independent, clean-room project: its behaviour was specified
 from public, user-facing descriptions of audio browsers, not from any other
 program's code.
 
+## Download
+
+**Latest: [v0.1.0](https://github.com/rwesterman/waveshelf/releases/tag/v0.1.0)
+(pre-release, macOS only).** Download `Waveshelf-0.1.0-macos-universal.zip`
+from the release page. It runs on macOS 12 or later, on Apple Silicon and Intel.
+
+Unzip it and move `Waveshelf.app` to Applications. The app is ad-hoc signed
+(no Apple Developer ID), so the first time it is opened after a download or
+AirDrop, macOS blocks it: right-click the app → **Open** → **Open**, or run
+`xattr -dr com.apple.quarantine /Applications/Waveshelf.app`.
+
+Linux and Windows builds aren't available yet; see the status below or build
+from source.
+
 ## Project status
 
-**Version 0.1.0: early, usable, not yet released.** The playable core
-(milestone 1) is done and tested on macOS. Packaging works for macOS; Linux
+**Version 0.1.0: early pre-release, macOS only.** The playable core
+(milestone 1) is done and tested on macOS, and the macOS app is published as
+[v0.1.0](https://github.com/rwesterman/waveshelf/releases/tag/v0.1.0). Linux
 packaging is written but has not been run yet.
 
 | Platform | Builds | Runs | Packaged | Notes |
 | --- | --- | --- | --- | --- |
-| macOS, Apple Silicon | ✅ | ✅ tested | ✅ `Waveshelf.app` (universal) | Primary development platform |
-| macOS, Intel | ✅ | ✅ launches under Rosetta | ✅ same universal app | Not tested on real Intel hardware |
+| macOS, Apple Silicon | ✅ | ✅ tested | ✅ released in v0.1.0 (universal app) | Primary development platform |
+| macOS, Intel | ✅ | ✅ launches under Rosetta | ✅ released in v0.1.0 (same app) | Not tested on real Intel hardware |
 | Linux x86_64 / arm64 | ❓ | ❓ | ⚠️ script written, **not yet run** | Needs a Linux machine or Docker to verify |
 | Windows | ❌ | ❌ | ❌ | Code is portable; FFmpeg build script is not |
 
@@ -52,8 +67,8 @@ packaging is written but has not been run yet.
   generated audio.
 - Dragging files out to Finder or a DAW isn't supported (needs native code).
 - No app icon yet.
-- The macOS app is ad-hoc signed, not notarized — see "Installing on another
-  Mac" below.
+- The macOS app is ad-hoc signed, not notarized, so macOS asks for an extra
+  confirmation on first launch (see [Download](#download)).
 
 ## Building from source
 
@@ -81,12 +96,9 @@ one app for Apple Silicon and Intel, macOS 12 or later, with FFmpeg inside
 `Contents/Frameworks`. Requires `nasm` (`brew install nasm`) for FFmpeg's Intel
 code paths. Takes about 5 minutes the first time.
 
-**Installing on another Mac:** unzip and move `Waveshelf.app` to
-Applications. Because the app is ad-hoc signed (no Apple Developer ID),
-Gatekeeper blocks it the first time when it arrived by download or AirDrop:
-right-click the app → Open → Open, or run
-`xattr -dr com.apple.quarantine /Applications/Waveshelf.app`. Distributing to
-other people properly needs a Developer ID certificate and notarization.
+Installing the result works the same as a downloaded release (see
+[Download](#download)). Removing the first-launch warning for other people
+needs an Apple Developer ID certificate and notarization.
 
 ### Linux (unverified)
 
