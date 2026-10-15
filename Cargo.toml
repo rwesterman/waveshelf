@@ -1,0 +1,25 @@
+[package]
+name = "waveshelf"
+version = "0.1.0"
+edition = "2024"
+description = "Fast audio browser and player built around a big waveform view"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+anyhow = "1.0.104"
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+cpal = "0.18"
+crossbeam-channel = "0.5.17"
+eframe = "0.36"
+egui = "0.36"
+egui_extras = "0.36"
+# Only the libraries the LGPL build provides (see scripts/build-ffmpeg.sh).
+ffmpeg-next = { version = "9", default-features = false, features = ["codec", "format", "software-resampling"] }
+rand = "0.9"
+rtrb = "0.4.0"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[dev-dependencies]
+egui_kittest = { version = "0.36", features = ["wgpu", "snapshot", "eframe"] }

@@ -1,0 +1,5 @@
+# Link FFmpeg from the LGPL build in third_party/ffmpeg (scripts/build-ffmpeg.sh),
+# never from a system install (Homebrew's is GPL). ffmpeg-sys-next prefers
+# FFMPEG_DIR over pkg-config. Packaging scripts override it per architecture.
+[env]
+FFMPEG_DIR = { value = "third_party/ffmpeg", relative = true }
