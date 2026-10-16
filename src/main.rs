@@ -2,6 +2,7 @@ mod app;
 mod audio;
 mod format;
 mod library;
+mod spectrogram;
 mod waveform;
 mod waveform_view;
 

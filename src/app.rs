@@ -10,8 +10,9 @@ use rand::Rng;
 use crate::audio::engine::{Command, EngineHandle, Event};
 use crate::format;
 use crate::library::{self, FileEntry, History, MetadataScanner, SortColumn};
+use crate::spectrogram::SpectrogramJob;
 use crate::waveform::PeakJob;
-use crate::waveform_view;
+use crate::waveform_view::{self, SpectrogramTexture};
 
 const PLAYING: Color32 = Color32::from_rgb(90, 200, 120);
 /// Hold Space at least this long while playing to dim instead of pausing.
@@ -48,6 +49,13 @@ struct Playing {
     name: String,
     duration: f64,
     finished: bool,
+}
+
+/// Background analysis of the loaded file, for the waveform view.
+struct Analysis {
+    peaks: PeakJob,
+    spectrogram: SpectrogramJob,
+    texture: SpectrogramTexture,
 }
 
 struct SpaceHold {
@@ -89,7 +97,7 @@ pub struct WaveshelfApp {
     next_id: u64,
     playing: Option<Playing>,
     played: HashSet<PathBuf>,
-    peaks: Option<PeakJob>,
+    analysis: Option<Analysis>,
     click_mode: ClickMode,
     advance: Advance,
     looping: bool,
@@ -143,7 +151,7 @@ impl WaveshelfApp {
             next_id: 0,
             playing: None,
             played: HashSet::new(),
-            peaks: None,
+            analysis: None,
             click_mode: ClickMode::Single,
             advance: Advance::Next,
             looping: false,
@@ -292,8 +300,11 @@ impl WaveshelfApp {
             start: 0.0,
             paused: false,
         });
-        let ctx_wake = self.repaint_handle();
-        self.peaks = Some(PeakJob::start(path.clone(), ctx_wake));
+        self.analysis = Some(Analysis {
+            peaks: PeakJob::start(path.clone(), self.repaint_handle()),
+            spectrogram: SpectrogramJob::start(path.clone(), self.repaint_handle()),
+            texture: SpectrogramTexture::default(),
+        });
         self.played.insert(path);
         self.cursor = Some(index);
         self.scroll_list = true;
@@ -388,7 +399,7 @@ impl WaveshelfApp {
     fn unload(&mut self) {
         self.engine.send(Command::Unload);
         self.playing = None;
-        self.peaks = None;
+        self.analysis = None;
     }
 
     fn on_finished(&mut self) {
@@ -442,7 +453,7 @@ impl WaveshelfApp {
                     if let Some(p) = self.playing.as_ref().filter(|p| p.id == id) {
                         self.message = Some(format!("Can't play {}: {error}", p.name));
                         self.playing = None;
-                        self.peaks = None;
+                        self.analysis = None;
                     }
                 }
                 Event::Device { name, error } => {
@@ -703,7 +714,7 @@ impl eframe::App for WaveshelfApp {
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
         egui::Panel::top("waveform")
             .resizable(true)
-            .default_size(170.0)
+            .default_size(260.0)
             .min_size(60.0)
             .show(ui, |ui| self.waveform(ui, &mut actions));
         egui::Panel::left("tree")
@@ -813,9 +824,20 @@ impl WaveshelfApp {
     fn waveform(&mut self, ui: &mut Ui, actions: &mut Vec<Action>) {
         let duration = self.playing.as_ref().map_or(0.0, |p| p.duration);
         let position = self.playing.as_ref().and(self.engine.position());
-        let guard = self.peaks.as_ref().map(|job| job.peaks.lock().unwrap());
-        let response = waveform_view::show(ui, guard.as_deref(), duration, position);
-        drop(guard);
+        let response = match &mut self.analysis {
+            Some(a) => {
+                let peaks = a.peaks.peaks.lock().unwrap();
+                let spectrogram = a.spectrogram.spectrogram.lock().unwrap();
+                waveform_view::show(
+                    ui,
+                    Some(&peaks),
+                    Some((&spectrogram, &mut a.texture)),
+                    duration,
+                    position,
+                )
+            }
+            None => waveform_view::show(ui, None, None, duration, position),
+        };
         if let Some(t) = response.seek_to {
             actions.push(Action::Seek(t));
         }
@@ -1117,7 +1139,9 @@ mod tests {
 
         harness.key_press(Key::ArrowDown);
         settle(&mut harness, 10.0, &|app| {
-            app.peaks.as_ref().is_some_and(|p| p.peaks.lock().unwrap().done)
+            app.analysis
+                .as_ref()
+                .is_some_and(|a| a.peaks.peaks.lock().unwrap().done && a.spectrogram.spectrogram.lock().unwrap().done)
         });
         std::thread::sleep(std::time::Duration::from_millis(1500));
         harness.step();

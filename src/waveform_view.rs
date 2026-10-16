@@ -1,13 +1,30 @@
-//! The big waveform: painting, ruler, playhead and mouse interaction.
+//! The big waveform and the spectrogram under it: painting, ruler, playhead
+//! and mouse interaction.
 
-use egui::{Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
+use egui::{
+    Align2, Color32, ColorImage, FontId, Pos2, Rect, Sense, Stroke, TextureHandle, TextureOptions, Ui, pos2, vec2,
+};
 
-use crate::format::time_short;
+use crate::format::{frequency, time_short};
+use crate::spectrogram::{self, BANDS, Spectrogram};
 use crate::waveform::{Peaks, columns};
 
 const RULER_HEIGHT: f32 = 16.0;
 const PLAYHEAD: Color32 = Color32::from_rgb(255, 150, 40);
 const HOVER: Color32 = Color32::from_rgb(90, 160, 255);
+/// Below this body height the spectrogram is hidden and the waveform fills it.
+const MIN_SPLIT_HEIGHT: f32 = 100.0;
+/// Frequencies marked on the spectrogram's left edge.
+const FREQUENCY_MARKS: [(f64, &str); 3] = [(100.0, "100"), (1000.0, "1k"), (10_000.0, "10k")];
+
+/// The spectrogram image on the GPU, rebuilt as columns arrive or the view is
+/// resized.
+#[derive(Default)]
+pub struct SpectrogramTexture {
+    texture: Option<TextureHandle>,
+    /// Computed columns, total columns and width it was built for.
+    built: (usize, usize, usize),
+}
 
 #[derive(Default)]
 pub struct WaveformResponse {
@@ -20,7 +37,13 @@ pub struct WaveformResponse {
     pub seek_steps: f32,
 }
 
-pub fn show(ui: &mut Ui, peaks: Option<&Peaks>, duration: f64, position: Option<f64>) -> WaveformResponse {
+pub fn show(
+    ui: &mut Ui,
+    peaks: Option<&Peaks>,
+    spectrogram: Option<(&Spectrogram, &mut SpectrogramTexture)>,
+    duration: f64,
+    position: Option<f64>,
+) -> WaveformResponse {
     let rect = ui.available_rect_before_wrap();
     let response = ui.allocate_rect(rect, Sense::click_and_drag());
     let painter = ui.painter_at(rect);
@@ -72,13 +95,33 @@ pub fn show(ui: &mut Ui, peaks: Option<&Peaks>, duration: f64, position: Option<
     let x_of = |t: f64| body.left() + (t / duration).clamp(0.0, 1.0) as f32 * body.width();
     let t_of = |x: f32| ((x - body.left()) / body.width()).clamp(0.0, 1.0) as f64 * duration;
 
+    // The spectrogram takes the lower half of the body when there is room.
+    let (wave_rect, mut spectrogram) = match spectrogram {
+        Some(s) if body.height() >= MIN_SPLIT_HEIGHT => {
+            let split = body.center().y.round();
+            let lower = Rect::from_min_max(pos2(body.left(), split), body.max);
+            (
+                Rect::from_min_max(body.min, pos2(body.right(), split)),
+                Some((s, lower)),
+            )
+        }
+        _ => (body, None),
+    };
+
     draw_ruler(&painter, ruler, duration, text);
     if let Some(p) = peaks {
-        draw_peaks(&painter, body, p, duration, wave, dark);
+        draw_peaks(&painter, wave_rect, p, duration, wave, dark);
+    }
+    if let Some(((s, texture), area)) = &mut spectrogram {
+        draw_spectrogram(ui, &painter, *area, s, duration, texture);
     }
     if let Some(pos) = position {
         let x = x_of(pos);
-        painter.rect_filled(Rect::from_min_max(body.min, pos2(x, body.bottom())), 0.0, played_tint);
+        painter.rect_filled(
+            Rect::from_min_max(wave_rect.min, pos2(x, wave_rect.bottom())),
+            0.0,
+            played_tint,
+        );
         painter.line_segment(
             [pos2(x, rect.top()), pos2(x, rect.bottom())],
             Stroke::new(1.5, PLAYHEAD),
@@ -89,22 +132,21 @@ pub fn show(ui: &mut Ui, peaks: Option<&Peaks>, duration: f64, position: Option<
             [pos2(hover.x, body.top()), pos2(hover.x, body.bottom())],
             Stroke::new(1.0, HOVER),
         );
-        let label = time_short(t_of(hover.x));
-        let anchor = if hover.x > body.right() - 60.0 {
-            Align2::RIGHT_TOP
+        let mut label = time_short(t_of(hover.x));
+        if let Some(((s, _), area)) = &spectrogram
+            && area.contains(hover)
+            && s.rate > 0
+        {
+            let position = f64::from((area.bottom() - hover.y) / area.height());
+            label = format!("{label}  {}", frequency(spectrogram::band_frequency(position, s.rate)));
+        }
+        let galley = painter.layout_no_wrap(label, FontId::monospace(11.0), HOVER);
+        let x = if hover.x + 4.0 + galley.size().x > body.right() {
+            hover.x - 4.0 - galley.size().x
         } else {
-            Align2::LEFT_TOP
+            hover.x + 4.0
         };
-        painter.text(
-            pos2(
-                hover.x + if anchor == Align2::LEFT_TOP { 4.0 } else { -4.0 },
-                body.top() + 2.0,
-            ),
-            anchor,
-            label,
-            FontId::monospace(11.0),
-            HOVER,
-        );
+        painter.galley(pos2(x, body.top() + 2.0), galley, HOVER);
     }
 
     if (response.clicked() || response.dragged())
@@ -222,4 +264,100 @@ fn draw_peaks(painter: &egui::Painter, body: Rect, peaks: &Peaks, duration: f64,
             painter.line_segment(s, Stroke::new(1.0, color));
         }
     }
+}
+
+fn draw_spectrogram(
+    ui: &Ui,
+    painter: &egui::Painter,
+    rect: Rect,
+    spectrogram: &Spectrogram,
+    duration: f64,
+    cache: &mut SpectrogramTexture,
+) {
+    let computed = spectrogram.columns();
+    if computed == 0 || spectrogram.column_secs() == 0.0 {
+        return;
+    }
+    let total = ((duration / spectrogram.column_secs()).ceil() as usize).max(computed);
+    // One texel per pixel, or per column when there are fewer columns than pixels.
+    let max_side = ui.input(|i| i.max_texture_side);
+    let width = ((rect.width() * ui.pixels_per_point()) as usize).clamp(1, total.min(max_side));
+    let key = (computed, total, width);
+    if cache.texture.is_none() || cache.built != key {
+        let image = spectrogram_image(&spectrogram.levels, total, width);
+        match &mut cache.texture {
+            Some(texture) => texture.set(image, TextureOptions::LINEAR),
+            None => cache.texture = Some(ui.ctx().load_texture("spectrogram", image, TextureOptions::LINEAR)),
+        }
+        cache.built = key;
+    }
+    if let Some(texture) = &cache.texture {
+        let uv = Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0));
+        painter.image(texture.id(), rect, uv, Color32::WHITE);
+    }
+
+    let color = Color32::from_white_alpha(170);
+    for (hz, label) in FREQUENCY_MARKS {
+        let position = spectrogram::band_position(hz, spectrogram.rate);
+        if !(0.0..=1.0).contains(&position) {
+            continue;
+        }
+        let y = rect.bottom() - position as f32 * rect.height();
+        painter.line_segment(
+            [pos2(rect.left(), y), pos2(rect.left() + 4.0, y)],
+            Stroke::new(1.0, color),
+        );
+        painter.text(
+            pos2(rect.left() + 6.0, y),
+            Align2::LEFT_CENTER,
+            label,
+            FontId::monospace(10.0),
+            color,
+        );
+    }
+}
+
+/// Columns past the computed data are transparent.
+fn spectrogram_image(levels: &[u8], total_columns: usize, width: usize) -> ColorImage {
+    let palette = palette();
+    let mut pixels = vec![Color32::TRANSPARENT; width * BANDS];
+    for (x, column) in spectrogram::columns(levels, total_columns, width)
+        .into_iter()
+        .enumerate()
+    {
+        let Some(column) = column else { continue };
+        // The image's first row is the highest band.
+        for (band, &level) in column.iter().enumerate() {
+            pixels[(BANDS - 1 - band) * width + x] = palette[usize::from(level)];
+        }
+    }
+    ColorImage::new([width, BANDS], pixels)
+}
+
+/// Level to colour along matplotlib's "inferno" map (CC0): black through
+/// purple, red and orange to pale yellow.
+fn palette() -> [Color32; 256] {
+    const STOPS: [[u8; 3]; 11] = [
+        [0x00, 0x00, 0x04],
+        [0x16, 0x0b, 0x39],
+        [0x42, 0x0a, 0x68],
+        [0x6a, 0x17, 0x6e],
+        [0x93, 0x26, 0x67],
+        [0xbc, 0x37, 0x54],
+        [0xdd, 0x51, 0x3a],
+        [0xf3, 0x78, 0x19],
+        [0xfc, 0xa5, 0x0a],
+        [0xf6, 0xd7, 0x46],
+        [0xfc, 0xff, 0xa4],
+    ];
+    std::array::from_fn(|i| {
+        let t = i as f32 / 255.0 * (STOPS.len() - 1) as f32;
+        let k = (t as usize).min(STOPS.len() - 2);
+        let f = t - k as f32;
+        let [r, g, b] = std::array::from_fn(|c| {
+            let (lo, hi) = (f32::from(STOPS[k][c]), f32::from(STOPS[k + 1][c]));
+            (lo + (hi - lo) * f).round() as u8
+        });
+        Color32::from_rgb(r, g, b)
+    })
 }

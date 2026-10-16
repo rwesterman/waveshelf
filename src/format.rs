@@ -38,6 +38,17 @@ pub fn sample_rate(rate: u32) -> String {
     }
 }
 
+/// "440 Hz", "1.25 kHz", "12.5 kHz".
+pub fn frequency(hz: f64) -> String {
+    if hz < 999.5 {
+        format!("{hz:.0} Hz")
+    } else if hz < 9995.0 {
+        format!("{:.2} kHz", hz / 1000.0)
+    } else {
+        format!("{:.1} kHz", hz / 1000.0)
+    }
+}
+
 pub fn channels(n: u16) -> String {
     match n {
         0 => String::new(),
@@ -90,5 +101,13 @@ mod tests {
         assert_eq!(sample_rate(0), "");
         assert_eq!(channels(1), "Mono");
         assert_eq!(channels(6), "6");
+    }
+
+    #[test]
+    fn frequencies() {
+        assert_eq!(frequency(440.0), "440 Hz");
+        assert_eq!(frequency(999.7), "1.00 kHz");
+        assert_eq!(frequency(1234.0), "1.23 kHz");
+        assert_eq!(frequency(12_345.0), "12.3 kHz");
     }
 }

@@ -47,6 +47,8 @@ packaging is written but has not been run yet.
   loop, stop-after-current, two-stage stop (rewind, then unload)
 - Big per-channel waveform computed in the background, with ruler, playhead,
   hover time, click/drag to seek
+- Spectrogram under the waveform (log frequency axis, 30 Hz to Nyquist),
+  computed in the background; hovering it shows the frequency
 - Click-free pause, mute and dim (hold Space); sample-accurate seeking;
   gapless looping; recovers when the output device disappears
 - Decodes via FFmpeg. Tested: WAV, FLAC, MP3, AAC/M4A, ALAC, Ogg Vorbis.
